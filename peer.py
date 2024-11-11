@@ -78,3 +78,10 @@ class PeerWrapper:
         self._tracks.append(track)
         if len(self._tracks) >= self._expect_tracks:
             self._wait_tracks.set()
+
+    async def __aenter__(self) -> PeerWrapper:
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        await self.close()
+        return False
