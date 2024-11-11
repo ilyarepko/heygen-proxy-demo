@@ -42,6 +42,13 @@ class HeyStream:
     async def close(self):
         await self._api.stream_stop(self._data.session_id)
 
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        await self.close()
+        return False
+
 
 class HeyApi:
     def __init__(self, api_key: str, limit: int = 1, url: str = DEFAULT_SERVER_URL):
