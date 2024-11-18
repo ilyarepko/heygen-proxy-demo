@@ -36,7 +36,7 @@ class PeerWrapper:
 
         return wrapper
 
-    def __init__(self, pc: aiortc.RTCPeerConnection, expect_tracks: int):
+    def __init__(self, pc: aiortc.RTCPeerConnection, expect_tracks: int = 2):
         self._pc = pc
         self._pc.add_listener('connectionstatechange', self._conn_state_change)
         self._pc.add_listener('track', self._track)
