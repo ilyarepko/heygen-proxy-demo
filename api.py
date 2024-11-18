@@ -112,7 +112,7 @@ class HeyApi:
 
         await self._client.close()
 
-    async def _session_close_all(self):
+    async def stream_close_unmanaged(self):
         resp = await self._api_streaming_list()
         if resp:
             coros = [
