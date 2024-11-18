@@ -66,13 +66,13 @@ class HeyApi:
 
     async def stream_new(self, immediately: bool = True, **kwargs) -> HeyStream:
         if immediately and self._available.locked():
-            raise HeyApiException() # TODO: add a description
+            raise HeyApiException("reached a maximum number of concurrent sessions")
 
         await self._available.acquire()
 
         resp = await self._api_streaming_new(**kwargs)
         if resp is None or resp.data is None:
-            raise HeyApiException()
+            raise HeyApiException("unexpected response from streaming.new")
 
         stream = HeyStream(self, resp.data)
         self._streams[resp.data.session_id] = stream
@@ -80,11 +80,11 @@ class HeyApi:
 
     async def stream_start(self, session_id: str, sdp: aiortc.RTCSessionDescription):
         if session_id not in self._streams:
-            raise HeyApiException()
+            raise HeyApiException(f"session {session_id} is not managed by us")
 
         resp = await self._api_streaming_start(session_id=session_id, sdp=sdp)
         if resp is None:
-            raise HeyApiException()
+            raise HeyApiException("unexpected response from ")
 
     async def stream_stop(self, session_id: str):
         if session_id not in self._streams:
