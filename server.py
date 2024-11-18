@@ -2,106 +2,83 @@ from __future__ import annotations
 import asyncio
 import logging
 
-import aiortc
-from aiohttp import web, WSMsgType
+from aiohttp import web, WSCloseCode, WSMsgType
 from pydantic import ValidationError
 
 from api import HeyApi, HeyStream, HeyApiException
 from peer import PeerWrapper
-from wsschema import *
+from wsschema import message_type_adapter, SDPMessage, TextMessage
 
 API_KEY = "<YOUR API KEY>"
 
 logger = logging.getLogger(__name__)
+routes = web.RouteTableDef()
 
-async def ws_loop():
-    await asyncio.sleep(20)
+_api = web.AppKey("heyapi", HeyApi)
+async def heyapi(app: web.Application):
+    api = app[_api] = HeyApi(API_KEY)
+    await api.stream_close_unmanaged()
+    yield
+    await api.close()
 
-class Handler:
-    _api = web.AppKey("heyapi", HeyApi)
+async def task_loop(stream: HeyStream, ws: web.WebSocketResponse):
+    async for wsmsg in ws:
+        if wsmsg.type != WSMsgType.TEXT:
+            raise ValidationError()
 
-    @classmethod
-    async def heyapi(cls, app: web.Application):
-        app[cls._api] = HeyApi(API_KEY)
-        await app[cls._api]._session_close_all()
-        yield
-        await app[cls._api].close()
+        match message_type_adapter.validate_json(wsmsg.data):
+            case TextMessage(text=text):
+                await stream.task(text)
+            case _:
+                raise ValidationError()
 
-    def __init__(self):
-        self._routes = [
-            web.get('/', self._root),
-            web.get('/ws', self._ws),
-            web.static('/', './static', append_version=True)
-        ]
+@routes.get('/ws')
+async def ws_handler(request: web.Request):
+    ws = web.WebSocketResponse()
+    if not ws.can_prepare(request):
+        return web.HTTPBadRequest()
 
-    @property
-    def routes(self):
-        return self._routes
+    await ws.prepare(request)
 
-    async def _root(self, request: web.Request):
-        return web.HTTPMovedPermanently('/index.html')
+    api = request.app[_api]
+    wscode = WSCloseCode.OK
 
-    async def _task_loop(self, heystream: HeyStream, ws: web.WebSocketResponse):
-        async for wsmsg in ws:
-            if wsmsg.type == WSMsgType.TEXT:
-                match message_type_adapter.validate_json(wsmsg.data):
-                    case TextMessage(text=text):
-                        await heystream.task(text)
-                    case ErrorMessage():
-                        raise Exception()
-                    case _:
-                        raise Exception()
-            else:
-                raise Exception()
-
-    async def _ws(self, request: web.Request):
-        ws = web.WebSocketResponse()
-        if not ws.can_prepare(request):
-            return ws
-
-        await ws.prepare(request)
-
-        api = request.app[Handler._api]
-        heystream = None
-        heypeer = None
-        peer = None
-
-        try:
-            heystream = await api.stream_new()
-            heypeer, heyanswer = await PeerWrapper.create_from_offer(heystream.ice_servers, heystream.sdp)
-            await heystream.start(heyanswer)
+    try:
+        async with (
+            await api.stream_new() as stream,
+            await PeerWrapper.from_offer(stream.sdp, stream.ice_servers) as heypeer,
+        ):
+            await stream.start(heypeer.pc.localDescription)
             await asyncio.wait_for(heypeer.wait_tracks, timeout=3)
 
-            peer, offer = await PeerWrapper.create_offer([], heypeer.proxify())
-            await ws.send_json(SDPMessage(sdp=offer).model_dump())
+            tracks = heypeer.proxify()
+            async with await PeerWrapper.offer(tracks) as peer:
+                offer = SDPMessage(sdp=peer.pc.localDescription).model_dump()
+                await ws.send_json(offer)
 
-            answer = SDPMessage.model_validate_json(await ws.receive_str(timeout=10))
-            await peer._pc.setRemoteDescription(answer.sdp)
+                incoming = await ws.receive_str(timeout=10)
+                answer = SDPMessage.model_validate_json(incoming)
+                await peer.pc.setRemoteDescription(answer.sdp)
 
-            waiters = [
-                asyncio.create_task(heypeer.wait_connected),
-                asyncio.create_task(peer.wait_connected)
-            ]
-            await asyncio.wait(waiters, timeout=20)
-            await self._task_loop(heystream, ws)
-        except asyncio.TimeoutError:
-            logging.exception("HeyGen peer connection timeout")
-        except HeyApiException:
-            logging.exception("HeyGen API error")
-        except ValidationError:
-            logging.exception("Protocol error")
-        except Exception:
-            logging.exception("Unknown error")
-        finally:
-            if heystream:
-                await heystream.close()
-            if heypeer:
-                await heypeer.close()
-            if peer:
-                await peer.close()
-            await ws.close()
+                waiters = [
+                    asyncio.create_task(heypeer.wait_connected),
+                    asyncio.create_task(peer.wait_connected)
+                ]
+                await asyncio.wait(waiters, timeout=20)
+                await task_loop(stream, ws)
+    except asyncio.TimeoutError:
+        logger.info(f"closing websocket connection with {request.remote} due to timeout")
+        wscode = WSCloseCode.INTERNAL_ERROR
+    except HeyApiException:
+        logger.exception("HeyGen API error")
+        wscode = WSCloseCode.INTERNAL_ERROR
+    except ValidationError:
+        logger.exception(f"schema error with {request.remote}")
+        wscode = WSCloseCode.INVALID_TEXT
+    finally:
+        await ws.close(code=wscode)
 
-        return ws
+    return ws
 
 if __name__ == "__main__":
     logging.basicConfig(
@@ -113,9 +90,8 @@ if __name__ == "__main__":
     loop = asyncio.get_event_loop()
     # loop.set_debug(True)
 
-    handler = Handler()
     app = web.Application()
-    app.add_routes(handler.routes)
-    app.cleanup_ctx.append(Handler.heyapi)
+    app.add_routes([*routes, web.static('/', './static', append_version=True)])
+    app.cleanup_ctx.append(heyapi)
 
     web.run_app(app, loop=loop)
