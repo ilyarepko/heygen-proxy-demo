@@ -7,18 +7,18 @@ import aiortc.contrib.media
 
 class PeerWrapper:
     @staticmethod
-    async def create_from_offer(
-        ice_servers: List[aiortc.RTCIceServer], sdp: aiortc.RTCSessionDescription, expect_tracks: int = 2
-    ) -> Tuple[PeerWrapper, aiortc.RTCSessionDescription]:
-        conf = aiortc.RTCConfiguration(iceServers=ice_servers)
-        pc = aiortc.RTCPeerConnection(conf)
+    async def from_offer(
+        sdp: aiortc.RTCSessionDescription,
+        ice_servers: List[aiortc.RTCIceServer],
+        expect_tracks: int = 2
+    ) -> PeerWrapper:
+        pc = aiortc.RTCPeerConnection(aiortc.RTCConfiguration(ice_servers))
         wrapper = PeerWrapper(pc, expect_tracks)
 
         await pc.setRemoteDescription(sdp)
-        answ = await pc.createAnswer()
-        await pc.setLocalDescription(answ)
+        await pc.setLocalDescription(await pc.createAnswer())
 
-        return (wrapper, answ)
+        return wrapper
 
     @staticmethod
     async def create_offer(
