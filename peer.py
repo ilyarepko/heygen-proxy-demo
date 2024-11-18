@@ -62,9 +62,6 @@ class PeerWrapper:
     def wait_tracks(self):
         return self._wait_tracks.wait()
 
-    async def open(self):
-        self._pc.setRemoteDescription()
-
     async def close(self) -> None:
         await self._pc.close()
 
