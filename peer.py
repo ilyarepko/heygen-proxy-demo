@@ -47,6 +47,10 @@ class PeerWrapper:
         self._tracks = []
 
     @property
+    def pc(self):
+        return self._pc
+
+    @property
     def tracks(self):
         return self._tracks
 
